@@ -1,0 +1,25 @@
+language: python
+python:
+  - "3.10"
+
+
+# Only build for pushes/PRs to the main branch
+branches:
+  only:
+    - main
+
+# Environment setup
+install:
+  # Optional: install dev tools
+  - pip install pytest flake8
+
+# Run checks and tests
+script:
+  - echo "Running flake8 lint..."
+  - flake8 . --exclude=venv,__pycache__,build,dist --max-line-length=100
+  - echo "Running tests..."
+  - PYTHONPATH=. pytest tests
+
+# Optional: notifications (email or Slack)
+notifications:
+  email: true
