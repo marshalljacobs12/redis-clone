@@ -1,14 +1,12 @@
-# tests/test_command_handler.py
+# tests/test_command_router.py
 
 import time
 import unittest
-from datastore import BaseStore
 from server.command_router import CommandHandler
 
 class TestCommandHandler(unittest.TestCase):
     def setUp(self):
-        self.store = BaseStore()
-        self.handler = CommandHandler(self.store)
+        self.handler = CommandHandler()
 
     def test_ping(self):
         res = self.handler.handle(["PING"])
@@ -57,6 +55,42 @@ class TestCommandHandler(unittest.TestCase):
 
     def test_empty_command(self):
         self.assertIn("-ERR", self.handler.handle([]))
+
+    # --- LIST COMMANDS ---
+    def test_lpush_rpush_lrange(self):
+        self.assertEqual(self.handler.handle(["LPUSH", "mylist", "c", "b", "a"]), ":3\r\n")
+        self.assertEqual(self.handler.handle(["RPUSH", "mylist", "d", "e"]), ":5\r\n")
+        result = self.handler.handle(["LRANGE", "mylist", "0", "4"])
+        self.assertEqual(result, "*5\r\n$1\r\na\r\n$1\r\nb\r\n$1\r\nc\r\n$1\r\nd\r\n$1\r\ne\r\n")
+    
+    def test_lpop_rpop(self):
+        self.handler.handle(["RPUSH", "mylist", "one", "two", "three"])
+        self.assertEqual(self.handler.handle(["LPOP", "mylist"]), "$3\r\none\r\n")
+        self.assertEqual(self.handler.handle(["RPOP", "mylist"]), "$5\r\nthree\r\n")
+
+    def test_llen(self):
+        self.handler.handle(["RPUSH", "mylist", "x", "y"])
+        self.assertEqual(self.handler.handle(["LLEN", "mylist"]), ":2\r\n")
+
+    def test_lrange_invalid_args(self):
+        self.assertIn("-ERR", self.handler.handle(["LRANGE", "mylist", "1"]))
+
+    # --- SET COMMANDS ---
+    def test_sadd_smembers(self):
+        self.assertEqual(self.handler.handle(["SADD", "myset", "a", "b", "c"]), ":3\r\n")
+        members = self.handler.handle(["SMEMBERS", "myset"])
+        self.assertTrue(all(m in members for m in ["$1\r\na\r\n", "$1\r\nb\r\n", "$1\r\nc\r\n"]))
+
+    def test_srem(self):
+        self.handler.handle(["SADD", "myset", "x", "y", "z"])
+        self.assertEqual(self.handler.handle(["SREM", "myset", "x", "y"]), ":2\r\n")
+        remaining = self.handler.handle(["SMEMBERS", "myset"])
+        self.assertNotIn("$1\nx\r\n", remaining)
+
+    def test_sismember(self):
+        self.handler.handle(["SADD", "myset", "hello"])
+        self.assertEqual(self.handler.handle(["SISMEMBER", "myset", "hello"]), ":1\r\n")
+        self.assertEqual(self.handler.handle(["SISMEMBER", "myset", "world"]), ":0\r\n")
 
 if __name__ == "__main__":
     unittest.main()

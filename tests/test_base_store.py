@@ -1,10 +1,10 @@
-# tests/test_datastore.py
+# tests/test_base_store.py
 
 import time
 import unittest
 from datastore import BaseStore
 
-class TestDataStore(unittest.TestCase):
+class TestBaseStore(unittest.TestCase):
     def setUp(self):
         self.ds = BaseStore()
 
