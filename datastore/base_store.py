@@ -1,9 +1,9 @@
-# redis_clone/datastore.py
+# datastore/base_store.py
 
 import time
 from typing import Any, Optional
 
-class DataStore:
+class BaseStore:
     def __init__(self):
         self.store: dict[str, tuple[Any, Optional[float]]] = {}
 

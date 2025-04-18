@@ -2,12 +2,12 @@
 
 import time
 import unittest
-from datastore import DataStore
-from command_handler import CommandHandler
+from datastore import BaseStore
+from server.command_router import CommandHandler
 
 class TestCommandHandler(unittest.TestCase):
     def setUp(self):
-        self.store = DataStore()
+        self.store = BaseStore()
         self.handler = CommandHandler(self.store)
 
     def test_ping(self):

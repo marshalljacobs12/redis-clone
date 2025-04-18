@@ -1,15 +1,15 @@
 # redis_clone/server.py
 
 import asyncio
-from datastore import DataStore
-from command_handler import CommandHandler
-from protocol import RESPParser
+from datastore import BaseStore
+from server.command_router import CommandHandler
+from protocol.parser import RESPParser
 
 class RedisServer:
     def __init__(self, host='127.0.0.1', port=6379):
         self.host = host
         self.port = port
-        self.store = DataStore()
+        self.store = BaseStore()
         self.handler = CommandHandler(self.store)
 
     async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):

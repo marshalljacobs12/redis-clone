@@ -2,11 +2,11 @@
 
 import time
 import unittest
-from datastore import DataStore
+from datastore import BaseStore
 
 class TestDataStore(unittest.TestCase):
     def setUp(self):
-        self.ds = DataStore()
+        self.ds = BaseStore()
 
     def test_set_get(self):
         self.ds.set("foo", "bar")

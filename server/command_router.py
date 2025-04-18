@@ -1,9 +1,9 @@
-# redis_clone/command_handler.py
+# server/command_router.py
 
-from datastore import DataStore
+from datastore import BaseStore
 
 class CommandHandler:
-    def __init__(self, store: DataStore):
+    def __init__(self, store: BaseStore):
         self.store = store
 
     def handle(self, tokens: list[str]):

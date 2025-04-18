@@ -1,6 +1,6 @@
 # tests/test_protocol.py
 import unittest
-from protocol import RESPParser
+from protocol.parser import RESPParser
 
 class TestRESPParser(unittest.TestCase):
     def test_simple_set_command(self):

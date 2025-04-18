@@ -1,4 +1,4 @@
-# redis_clone/protocol.py
+# protocol/parser.py
 
 # RESP parsing and serialization
 class RESPParser:
