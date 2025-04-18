@@ -110,5 +110,14 @@ class TestCommandHandler(unittest.TestCase):
         self.handler.handle(["HSET", "h", "f", "v"])
         self.assertEqual(self.handler.handle(["HDEL", "h", "f", "nonexistent"]), ":1\r\n")
 
+    # --- ZSET COMMANDS ---
+    def test_zadd_zscore_zrange(self):
+        self.assertEqual(self.handler.handle(["ZADD", "myz", "2", "b"]), ":1\r\n")
+        self.assertEqual(self.handler.handle(["ZADD", "myz", "1", "a"]), ":1\r\n")
+        self.assertEqual(self.handler.handle(["ZSCORE", "myz", "a"]), "$3\r\n1.0\r\n")        
+        res = self.handler.handle(["ZRANGE", "myz", "0", "1"])
+        self.assertIn("$1\r\na\r\n", res)
+        self.assertIn("$1\r\nb\r\n", res)
+
 if __name__ == "__main__":
     unittest.main()

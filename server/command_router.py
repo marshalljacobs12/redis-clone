@@ -1,6 +1,6 @@
 # server/command_router.py
 
-from datastore import BaseStore, ListStore, SetStore, HashStore
+from datastore import BaseStore, ListStore, SetStore, HashStore, ZSetStore
 from protocol import serializer as s
 
 class CommandHandler:
@@ -9,6 +9,7 @@ class CommandHandler:
         self.lists = ListStore()
         self.sets = SetStore()
         self.hashes = HashStore()
+        self.zsets = ZSetStore()
 
     def handle(self, tokens: list[str]):
         if not tokens:
@@ -118,7 +119,7 @@ class CommandHandler:
                 members = self.sets.smembers(tokens[1])
                 return s.array(members)
 
-            # --- HASH Comands ---
+            # --- HASH Commands ---
             elif cmd == "HSET":
                 if len(tokens) != 4:
                     return s.error("Usage: HSET key field value")
@@ -141,6 +142,25 @@ class CommandHandler:
                     return s.error("Usage: HDEL key field [field ...]")
                 count = self.hashes.hdel(tokens[1], *tokens[2:])
                 return s.integer(count)
+            
+            # --- ZSET Commands ---
+            elif cmd == "ZADD":
+                if len(tokens) != 4:
+                    return s.error("Usage: ZADD key score member")
+                result = self.zsets.zadd(tokens[1], float(tokens[2]), tokens[3])
+                return s.integer(result)
+
+            elif cmd == "ZSCORE":
+                if len(tokens) != 3:
+                    return s.error("Usage: ZSCORE key member")
+                score = self.zsets.zscore(tokens[1], tokens[2])
+                return s.bulk_string(score)
+
+            elif cmd == "ZRANGE":
+                if len(tokens) != 4:
+                    return s.error("Usage: ZRANGE key start stop")
+                members = self.zsets.zrange(tokens[1], int(tokens[2]), int(tokens[3]))
+                return s.array(members)
 
             else:
                 return s.error(f"Unknown command '{cmd}'")
