@@ -92,5 +92,23 @@ class TestCommandHandler(unittest.TestCase):
         self.assertEqual(self.handler.handle(["SISMEMBER", "myset", "hello"]), ":1\r\n")
         self.assertEqual(self.handler.handle(["SISMEMBER", "myset", "world"]), ":0\r\n")
 
+    # --- HASH COMMANDS ---
+    def test_hset_hget(self):
+        self.assertEqual(self.handler.handle(["HSET", "h", "f1", "v1"]), ":1\r\n")
+        self.assertEqual(self.handler.handle(["HGET", "h", "f1"]), "$2\r\nv1\r\n")
+
+    def test_hgetall(self):
+        self.handler.handle(["HSET", "h", "a", "1"])
+        self.handler.handle(["HSET", "h", "b", "2"])
+        res = self.handler.handle(["HGETALL", "h"])
+        self.assertIn("$1\r\na\r\n", res)
+        self.assertIn("$1\r\n1\r\n", res)
+        self.assertIn("$1\r\nb\r\n", res)
+        self.assertIn("$1\r\n2\r\n", res)  
+
+    def test_hdel(self):
+        self.handler.handle(["HSET", "h", "f", "v"])
+        self.assertEqual(self.handler.handle(["HDEL", "h", "f", "nonexistent"]), ":1\r\n")
+
 if __name__ == "__main__":
     unittest.main()

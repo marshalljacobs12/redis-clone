@@ -1,6 +1,6 @@
 # server/command_router.py
 
-from datastore import BaseStore, ListStore, SetStore
+from datastore import BaseStore, ListStore, SetStore, HashStore
 from protocol import serializer as s
 
 class CommandHandler:
@@ -8,6 +8,7 @@ class CommandHandler:
         self.store = BaseStore()
         self.lists = ListStore()
         self.sets = SetStore()
+        self.hashes = HashStore()
 
     def handle(self, tokens: list[str]):
         if not tokens:
@@ -116,6 +117,30 @@ class CommandHandler:
                     return self._error("Usage: SMEMBERS key")
                 members = self.sets.smembers(tokens[1])
                 return s.array(members)
+
+            # --- HASH Comands ---
+            elif cmd == "HSET":
+                if len(tokens) != 4:
+                    return s.error("Usage: HSET key field value")
+                result = self.hashes.hset(tokens[1], tokens[2], tokens[3])
+                return s.integer(result)
+
+            elif cmd == "HGET":
+                if len(tokens) != 3:
+                    return s.error("Usage: HGET key field")
+                val = self.hashes.hget(tokens[1], tokens[2])
+                return s.bulk_string(val)
+
+            elif cmd == "HGETALL":
+                if len(tokens) != 2:
+                    return s.error("Usage: HGETALL key")
+                return s.array(self.hashes.hgetall(tokens[1]))
+
+            elif cmd == "HDEL":
+                if len(tokens) < 3:
+                    return s.error("Usage: HDEL key field [field ...]")
+                count = self.hashes.hdel(tokens[1], *tokens[2:])
+                return s.integer(count)
 
             else:
                 return s.error(f"Unknown command '{cmd}'")
