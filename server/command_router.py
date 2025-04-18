@@ -3,6 +3,8 @@
 from datastore import BaseStore, ListStore, SetStore, HashStore, ZSetStore, ExpiryManager
 from protocol import serializer as s
 from persistence.aof_writer import AOFWriter
+from persistence.aof_compactor import rewrite_aof
+import os
 
 class CommandHandler:
     def __init__(self):
@@ -25,6 +27,10 @@ class CommandHandler:
             if cmd == "PING":
                 return s.simple_string("PONG")
 
+            elif cmd == "BGREWRITEAOF":
+                self.rewrite_aof_log()
+                return s.simple_string("Background AOF rewrite started")
+            
             elif cmd == "SET":
                 if len(tokens) != 3:
                     return self._error("Usage: SET key value")
@@ -217,3 +223,7 @@ class CommandHandler:
         self.zsets.scores.pop(key, None)
         self.zsets.sorted.pop(key, None)
         self.expiry.remove(key)
+        
+    def rewrite_aof_log(self):
+        rewrite_aof(self)
+        os.replace("aof.log.rewrite", "aof.log")
