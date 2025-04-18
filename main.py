@@ -1,63 +1,54 @@
-# redis_clone/main.py
+# main.py
 
 import asyncio
 from server.command_router import CommandHandler
-from protocol.parser import RESPParser
 
-class RedisServer:
-    def __init__(self, host='127.0.0.1', port=6379):
-        self.host = host
-        self.port = port
-        self.handler = CommandHandler()
-
-    async def handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        addr = writer.get_extra_info('peername')
-        print(f"[+] Connection from {addr}")
-
+async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, handler: CommandHandler):
+    addr = writer.get_extra_info('peername')
+    while True:
         try:
-            while not reader.at_eof():
-                data = await reader.readuntil(b'\r\n')  # read first line
-                if not data:
-                    break
+            data = await reader.readline()
+            if not data:
+                break
+            # RESP parsing
+            command_line = data.decode().strip()
+            if command_line.startswith("*"):
+                # Multi-bulk command; read full RESP array
+                count = int(command_line[1:])
+                tokens = []
+                for _ in range(count):
+                    await reader.readline()  # Skip $<len>
+                    value = (await reader.readline()).decode().strip()
+                    tokens.append(value)
+                response = handler.handle(tokens)
+            else:
+                tokens = command_line.split()
+                response = handler.handle(tokens)
 
-                # Peek at the array length to know how much more to read
-                remaining = await self._read_full_request(reader, data)
-                full_data = data + remaining
+            writer.write(response.encode())
+            await writer.drain()
+        except Exception as e:
+            writer.write(f"-ERR {str(e)}\r\n".encode())
+            await writer.drain()
+            break
+    writer.close()
+    await writer.wait_closed()
 
-                # Parse the command
-                try:
-                    parser = RESPParser(full_data)
-                    tokens = parser.parse()
-                    response = self.handler.handle(tokens)
-                except Exception as e:
-                    response = f"-ERR {str(e)}\r\n"
 
-                writer.write(response.encode())
-                await writer.drain()
-        except (asyncio.IncompleteReadError, ConnectionResetError):
-            print(f"[-] Connection closed: {addr}")
-        finally:
-            writer.close()
-            await writer.wait_closed()
+async def main():
+    handler = CommandHandler()
 
-    async def _read_full_request(self, reader, first_line):
-        # Only needed for array requests
-        if not first_line.startswith(b'*'):
-            return b''
-        num_elements = int(first_line[1:-2])
-        chunks = []
-        for _ in range(num_elements * 2):  # $len + data per element
-            chunks.append(await reader.readuntil(b'\r\n'))
-        return b''.join(chunks)
+    # Start background GC
+    asyncio.create_task(handler.expiry.run_gc(handler._delete_key_everywhere, interval=1))
 
-    async def start(self):
-        server = await asyncio.start_server(self.handle_client, self.host, self.port)
-        print(f"🚀 Redis clone server running on {self.host}:{self.port}")
-        async with server:
-            await server.serve_forever()
+    server = await asyncio.start_server(
+        lambda r, w: handle_client(r, w, handler), host="0.0.0.0", port=6379
+    )
+
+    print("🚀 Redis clone running on port 6379")
+    async with server:
+        await server.serve_forever()
+
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(RedisServer().start())
-    except KeyboardInterrupt:
-        print("\n🛑 Server shut down.")
+    asyncio.run(main())

@@ -1,6 +1,6 @@
 # server/command_router.py
 
-from datastore import BaseStore, ListStore, SetStore, HashStore, ZSetStore
+from datastore import BaseStore, ListStore, SetStore, HashStore, ZSetStore, ExpiryManager
 from protocol import serializer as s
 
 class CommandHandler:
@@ -10,6 +10,7 @@ class CommandHandler:
         self.sets = SetStore()
         self.hashes = HashStore()
         self.zsets = ZSetStore()
+        self.expiry = ExpiryManager()
 
     def handle(self, tokens: list[str]):
         if not tokens:
@@ -31,6 +32,7 @@ class CommandHandler:
             elif cmd == "GET":
                 if len(tokens) != 2:
                     return self._error("Usage: GET key")
+                self._delete_if_expired(tokens[1])
                 val = self.store.get(tokens[1])
                 return s.bulk_string(val)
 
@@ -43,20 +45,32 @@ class CommandHandler:
             elif cmd == "EXISTS":
                 if len(tokens) != 2:
                     return self._error("Usage: EXISTS key")
+                self._delete_if_expired(tokens[1])
                 exists = self.store.exists(tokens[1])
                 return s.integer(int(exists))
 
             elif cmd == "EXPIRE":
                 if len(tokens) != 3:
-                    return self._error("Usage: EXPIRE key seconds")
-                success = self.store.expire(tokens[1], int(tokens[2]))
-                return s.integer(int(success))
+                    return s.error("Usage: EXPIRE key seconds")
+                key = tokens[1]
+                ttl = int(tokens[2])
+                # Check if key exists in any store
+                exists = (
+                    self.store.exists(key) or
+                    key in self.hashes.hashes or
+                    key in self.lists.lists or
+                    key in self.sets.sets or
+                    key in self.zsets.scores  # or self.zsets.sorted, depending on your implementation
+                )
+                if not exists:
+                    return s.integer(0)
+                self.expiry.set_expiry(key, ttl)
+                return s.integer(1)
 
             elif cmd == "TTL":
                 if len(tokens) != 2:
-                    return self._error("Usage: TTL key")
-                ttl = self.store.ttl(tokens[1])
-                return s.integer(ttl)
+                    return s.error("Usage: TTL key")
+                return s.integer(self.expiry.ttl(tokens[1]))
 
             # --- LIST Commands ---
             elif cmd == "LPUSH":
@@ -74,24 +88,28 @@ class CommandHandler:
             elif cmd == "LPOP":
                 if len(tokens) != 2:
                     return self._error("Usage: LPOP key")
+                self._delete_if_expired(tokens[1])
                 val = self.lists.lpop(tokens[1])
                 return s.bulk_string(val)
 
             elif cmd == "RPOP":
                 if len(tokens) != 2:
                     return self._error("Usage: RPOP key")
+                self._delete_if_expired(tokens[1])
                 val = self.lists.rpop(tokens[1])
                 return s.bulk_string(val)
 
             elif cmd == "LRANGE":
                 if len(tokens) != 4:
                     return self._error("Usage: LRANGE key start end")
+                self._delete_if_expired(tokens[1])
                 result = self.lists.lrange(tokens[1], int(tokens[2]), int(tokens[3]))
                 return s.array(result)
 
             elif cmd == "LLEN":
                 if len(tokens) != 2:
                     return self._error("Usage: LLEN key")
+                self._delete_if_expired(tokens[1])
                 return s.integer(self.lists.llen(tokens[1]))
 
             # --- SET Commands ---
@@ -110,12 +128,14 @@ class CommandHandler:
             elif cmd == "SISMEMBER":
                 if len(tokens) != 3:
                     return self._error("Usage: SISMEMBER key member")
+                self._delete_if_expired(tokens[1])
                 is_member = self.sets.sismember(tokens[1], tokens[2])
                 return s.integer(int(is_member))
 
             elif cmd == "SMEMBERS":
                 if len(tokens) != 2:
                     return self._error("Usage: SMEMBERS key")
+                self._delete_if_expired(tokens[1])
                 members = self.sets.smembers(tokens[1])
                 return s.array(members)
 
@@ -129,12 +149,14 @@ class CommandHandler:
             elif cmd == "HGET":
                 if len(tokens) != 3:
                     return s.error("Usage: HGET key field")
+                self._delete_if_expired(tokens[1])
                 val = self.hashes.hget(tokens[1], tokens[2])
                 return s.bulk_string(val)
 
             elif cmd == "HGETALL":
                 if len(tokens) != 2:
                     return s.error("Usage: HGETALL key")
+                self._delete_if_expired(tokens[1])
                 return s.array(self.hashes.hgetall(tokens[1]))
 
             elif cmd == "HDEL":
@@ -153,12 +175,14 @@ class CommandHandler:
             elif cmd == "ZSCORE":
                 if len(tokens) != 3:
                     return s.error("Usage: ZSCORE key member")
+                self._delete_if_expired(tokens[1])
                 score = self.zsets.zscore(tokens[1], tokens[2])
                 return s.bulk_string(score)
 
             elif cmd == "ZRANGE":
                 if len(tokens) != 4:
                     return s.error("Usage: ZRANGE key start stop")
+                self._delete_if_expired(tokens[1])
                 members = self.zsets.zrange(tokens[1], int(tokens[2]), int(tokens[3]))
                 return s.array(members)
 
@@ -167,3 +191,16 @@ class CommandHandler:
 
         except Exception as e:
             return s.error(str(e))
+        
+    def _delete_if_expired(self, key: str):
+        if self.expiry.is_expired(key):
+            self._delete_key_everywhere(key)
+
+    def _delete_key_everywhere(self, key: str):
+        self.store.delete(key)
+        self.lists.lists.pop(key, None)
+        self.sets.sets.pop(key, None)
+        self.hashes.hashes.pop(key, None)
+        self.zsets.scores.pop(key, None)
+        self.zsets.sorted.pop(key, None)
+        self.expiry.remove(key)
