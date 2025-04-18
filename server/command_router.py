@@ -5,6 +5,7 @@ from protocol import serializer as s
 from persistence.aof_writer import AOFWriter
 from persistence.aof_compactor import rewrite_aof
 import os
+import threading
 
 class CommandHandler:
     def __init__(self):
@@ -15,6 +16,11 @@ class CommandHandler:
         self.zsets = ZSetStore()
         self.expiry = ExpiryManager()
         self.aof = AOFWriter()
+
+        # AOF rewrite tracking
+        self._last_rewrite_size = os.path.getsize("aof.log") if os.path.exists("aof.log") else 0
+        self._rewrite_threshold = 1024  # 1KB for testing, 1MB for prod
+        self._rewrite_in_progress = False
 
     def handle(self, tokens: list[str]):
         if not tokens:
@@ -28,14 +34,14 @@ class CommandHandler:
                 return s.simple_string("PONG")
 
             elif cmd == "BGREWRITEAOF":
-                self.rewrite_aof_log()
+                self._start_manual_rewrite()
                 return s.simple_string("Background AOF rewrite started")
             
             elif cmd == "SET":
                 if len(tokens) != 3:
                     return self._error("Usage: SET key value")
                 self.store.set(tokens[1], tokens[2])
-                self.aof.append(tokens)
+                self._record(tokens)
                 return s.simple_string("OK")
 
             elif cmd == "GET":
@@ -49,7 +55,7 @@ class CommandHandler:
                 if len(tokens) != 2:
                     return self._error("Usage: DEL key")
                 success = self.store.delete(tokens[1])
-                self.aof.append(tokens)
+                self._record(tokens)
                 return s.integer(int(success))
 
             elif cmd == "EXISTS":
@@ -87,14 +93,14 @@ class CommandHandler:
                 if len(tokens) < 3:
                     return self._error("Usage: LPUSH key value [value ...]")
                 count = self.lists.lpush(tokens[1], *tokens[2:])
-                self.aof.append(tokens)
+                self._record(tokens)
                 return s.integer(count)
 
             elif cmd == "RPUSH":
                 if len(tokens) < 3:
                     return self._error("Usage: RPUSH key value [value ...]")
                 count = self.lists.rpush(tokens[1], *tokens[2:])
-                self.aof.append(tokens)
+                self._record(tokens)
                 return s.integer(count)
 
             elif cmd == "LPOP":
@@ -102,7 +108,7 @@ class CommandHandler:
                     return self._error("Usage: LPOP key")
                 self._delete_if_expired(tokens[1])
                 val = self.lists.lpop(tokens[1])
-                self.aof.append(tokens)
+                self._record(tokens)
                 return s.bulk_string(val)
 
             elif cmd == "RPOP":
@@ -110,7 +116,7 @@ class CommandHandler:
                     return self._error("Usage: RPOP key")
                 self._delete_if_expired(tokens[1])
                 val = self.lists.rpop(tokens[1])
-                self.aof.append(tokens)
+                self._record(tokens)
                 return s.bulk_string(val)
 
             elif cmd == "LRANGE":
@@ -131,14 +137,14 @@ class CommandHandler:
                 if len(tokens) < 3:
                     return self._error("Usage: SADD key member [member ...]")
                 count = self.sets.sadd(tokens[1], *tokens[2:])
-                self.aof.append(tokens)
+                self._record(tokens)
                 return s.integer(count)
 
             elif cmd == "SREM":
                 if len(tokens) < 3:
                     return self._error("Usage: SREM key member [member ...]")
                 count = self.sets.srem(tokens[1], *tokens[2:])
-                self.aof.append(tokens)
+                self._record(tokens)
                 return s.integer(count)
 
             elif cmd == "SISMEMBER":
@@ -160,7 +166,7 @@ class CommandHandler:
                 if len(tokens) != 4:
                     return s.error("Usage: HSET key field value")
                 result = self.hashes.hset(tokens[1], tokens[2], tokens[3])
-                self.aof.append(tokens)
+                self._record(tokens)
                 return s.integer(result)
 
             elif cmd == "HGET":
@@ -180,7 +186,7 @@ class CommandHandler:
                 if len(tokens) < 3:
                     return s.error("Usage: HDEL key field [field ...]")
                 count = self.hashes.hdel(tokens[1], *tokens[2:])
-                self.aof.append(tokens)
+                self._record(tokens)
                 return s.integer(count)
             
             # --- ZSET Commands ---
@@ -188,7 +194,7 @@ class CommandHandler:
                 if len(tokens) != 4:
                     return s.error("Usage: ZADD key score member")
                 result = self.zsets.zadd(tokens[1], float(tokens[2]), tokens[3])
-                self.aof.append(tokens)
+                self._record(tokens)
                 return s.integer(result)
 
             elif cmd == "ZSCORE":
@@ -211,6 +217,35 @@ class CommandHandler:
         except Exception as e:
             return s.error(str(e))
         
+    def _record(self, tokens: list[str]):
+        self.aof.append(tokens)
+        self._maybe_trigger_rewrite()
+
+    def _maybe_trigger_rewrite(self):
+        if self._rewrite_in_progress:
+            return
+        current_size = os.path.getsize("aof.log")
+        print(f"current_size: {current_size}")
+        if current_size - self._last_rewrite_size > self._rewrite_threshold:
+            print(f"if current_size - self._last_rewrite_size > self._rewrite_threshold")
+            self._start_background_rewrite()
+
+    def _start_manual_rewrite(self):
+        if not self._rewrite_in_progress:
+            self._start_background_rewrite()
+
+    def _start_background_rewrite(self):
+        self._rewrite_in_progress = True
+        threading.Thread(target=self._background_rewrite).start()
+
+    def _background_rewrite(self):
+        try:
+            rewrite_aof(self)
+            os.replace("aof.log.rewrite", "aof.log")
+            self._last_rewrite_size = os.path.getsize("aof.log")
+        finally:
+            self._rewrite_in_progress = False
+
     def _delete_if_expired(self, key: str):
         if self.expiry.is_expired(key):
             self._delete_key_everywhere(key)
@@ -223,7 +258,3 @@ class CommandHandler:
         self.zsets.scores.pop(key, None)
         self.zsets.sorted.pop(key, None)
         self.expiry.remove(key)
-        
-    def rewrite_aof_log(self):
-        rewrite_aof(self)
-        os.replace("aof.log.rewrite", "aof.log")

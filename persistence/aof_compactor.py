@@ -7,6 +7,7 @@ def rewrite_aof(handler, out_file="aof.log.rewrite"):
 
         # BaseStore (strings)
         for key, (value, _) in handler.store.store.items():
+            print(f"key: {key}, value: {value}")
             write_line(_to_resp(["SET", key, value]))
 
         # ListStore
