@@ -2,6 +2,7 @@
 
 from datastore import BaseStore, ListStore, SetStore, HashStore, ZSetStore, ExpiryManager
 from protocol import serializer as s
+from persistence.aof_writer import AOFWriter
 
 class CommandHandler:
     def __init__(self):
@@ -11,6 +12,7 @@ class CommandHandler:
         self.hashes = HashStore()
         self.zsets = ZSetStore()
         self.expiry = ExpiryManager()
+        self.aof = AOFWriter()
 
     def handle(self, tokens: list[str]):
         if not tokens:
@@ -27,6 +29,7 @@ class CommandHandler:
                 if len(tokens) != 3:
                     return self._error("Usage: SET key value")
                 self.store.set(tokens[1], tokens[2])
+                self.aof.append(tokens)
                 return s.simple_string("OK")
 
             elif cmd == "GET":
@@ -40,6 +43,7 @@ class CommandHandler:
                 if len(tokens) != 2:
                     return self._error("Usage: DEL key")
                 success = self.store.delete(tokens[1])
+                self.aof.append(tokens)
                 return s.integer(int(success))
 
             elif cmd == "EXISTS":
@@ -77,12 +81,14 @@ class CommandHandler:
                 if len(tokens) < 3:
                     return self._error("Usage: LPUSH key value [value ...]")
                 count = self.lists.lpush(tokens[1], *tokens[2:])
+                self.aof.append(tokens)
                 return s.integer(count)
 
             elif cmd == "RPUSH":
                 if len(tokens) < 3:
                     return self._error("Usage: RPUSH key value [value ...]")
                 count = self.lists.rpush(tokens[1], *tokens[2:])
+                self.aof.append(tokens)
                 return s.integer(count)
 
             elif cmd == "LPOP":
@@ -90,6 +96,7 @@ class CommandHandler:
                     return self._error("Usage: LPOP key")
                 self._delete_if_expired(tokens[1])
                 val = self.lists.lpop(tokens[1])
+                self.aof.append(tokens)
                 return s.bulk_string(val)
 
             elif cmd == "RPOP":
@@ -97,6 +104,7 @@ class CommandHandler:
                     return self._error("Usage: RPOP key")
                 self._delete_if_expired(tokens[1])
                 val = self.lists.rpop(tokens[1])
+                self.aof.append(tokens)
                 return s.bulk_string(val)
 
             elif cmd == "LRANGE":
@@ -117,12 +125,14 @@ class CommandHandler:
                 if len(tokens) < 3:
                     return self._error("Usage: SADD key member [member ...]")
                 count = self.sets.sadd(tokens[1], *tokens[2:])
+                self.aof.append(tokens)
                 return s.integer(count)
 
             elif cmd == "SREM":
                 if len(tokens) < 3:
                     return self._error("Usage: SREM key member [member ...]")
                 count = self.sets.srem(tokens[1], *tokens[2:])
+                self.aof.append(tokens)
                 return s.integer(count)
 
             elif cmd == "SISMEMBER":
@@ -144,6 +154,7 @@ class CommandHandler:
                 if len(tokens) != 4:
                     return s.error("Usage: HSET key field value")
                 result = self.hashes.hset(tokens[1], tokens[2], tokens[3])
+                self.aof.append(tokens)
                 return s.integer(result)
 
             elif cmd == "HGET":
@@ -163,6 +174,7 @@ class CommandHandler:
                 if len(tokens) < 3:
                     return s.error("Usage: HDEL key field [field ...]")
                 count = self.hashes.hdel(tokens[1], *tokens[2:])
+                self.aof.append(tokens)
                 return s.integer(count)
             
             # --- ZSET Commands ---
@@ -170,6 +182,7 @@ class CommandHandler:
                 if len(tokens) != 4:
                     return s.error("Usage: ZADD key score member")
                 result = self.zsets.zadd(tokens[1], float(tokens[2]), tokens[3])
+                self.aof.append(tokens)
                 return s.integer(result)
 
             elif cmd == "ZSCORE":

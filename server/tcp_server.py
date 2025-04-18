@@ -2,6 +2,7 @@
 
 import asyncio
 from server.command_router import CommandHandler
+from persistence.aof_replayer import replay_aof
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, handler: CommandHandler):
     addr = writer.get_extra_info('peername')
@@ -40,6 +41,9 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
 async def start_server():
     handler = CommandHandler()
 
+    # Replay past state
+    replay_aof("aof.log", handler)
+    
     # Start GC task
     asyncio.create_task(handler.expiry.run_gc(handler._delete_key_everywhere, interval=1))
 
