@@ -1,6 +1,6 @@
 # persistence/aof_replayer.py
 
-def replay_aof(filepath: str, command_handler):
+async def replay_aof(filepath: str, command_handler):
     try:
         with open(filepath, "r") as f:
             lines = f.readlines()
@@ -19,4 +19,4 @@ def replay_aof(filepath: str, command_handler):
             i += 1  # skip $<len>
             tokens.append(lines[i].strip())
             i += 1
-        command_handler.handle(tokens)
+        await command_handler.handle(tokens)

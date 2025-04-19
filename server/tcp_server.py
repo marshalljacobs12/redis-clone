@@ -43,7 +43,7 @@ async def start_server():
     handler = CommandHandler()
 
     # Replay past state
-    replay_aof("aof.log", handler)
+    await replay_aof("aof.log", handler)
     
     # Start GC task
     asyncio.create_task(handler.expiry.run_gc(handler._delete_key_everywhere, interval=1))
