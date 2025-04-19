@@ -35,7 +35,10 @@ class CommandHandler:
             elif cmd == "SET":
                 if len(tokens) != 3:
                     return self._error("Usage: SET key value")
-                self.store.set(tokens[1], tokens[2])
+                try:
+                    self.store.set(tokens[1], tokens[2])
+                except MemoryError as e:
+                    return s.error(str(e))
                 self.aof.append(tokens)
                 return s.simple_string("OK")
 
