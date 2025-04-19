@@ -25,9 +25,10 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
             else:
                 tokens = command_line.split()
 
-            response = handler.handle(tokens)
-            writer.write(response.encode())
-            await writer.drain()
+            response = await handler.handle(tokens, writer)
+            if response is not None:
+                writer.write(response.encode())
+                await writer.drain()
 
         except Exception as e:
             writer.write(f"-ERR {str(e)}\r\n".encode())

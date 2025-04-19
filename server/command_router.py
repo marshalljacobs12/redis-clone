@@ -1,6 +1,6 @@
 # server/command_router.py
 
-from datastore import BaseStore, ListStore, SetStore, HashStore, ZSetStore, ExpiryManager
+from datastore import BaseStore, ListStore, SetStore, HashStore, ZSetStore, ExpiryManager, PubSubManager
 from protocol import serializer as s
 from persistence.aof_writer import AOFWriter
 from persistence.aof_compactor import rewrite_aof
@@ -14,9 +14,10 @@ class CommandHandler:
         self.hashes = HashStore()
         self.zsets = ZSetStore()
         self.expiry = ExpiryManager()
+        self.pubsub = PubSubManager()
         self.aof = AOFWriter()
 
-    def handle(self, tokens: list[str]):
+    async def handle(self, tokens: list[str], writer=None):
         if not tokens:
             return s.error("Empty command")
 
@@ -204,7 +205,34 @@ class CommandHandler:
                 self._delete_if_expired(tokens[1])
                 members = self.zsets.zrange(tokens[1], int(tokens[2]), int(tokens[3]))
                 return s.array(members)
+            # --- Pub/Sub Commands ---
+            if cmd == "SUBSCRIBE":
+                if not writer:
+                    return s.error("SUBSCRIBE requires a client connection.")
+                if len(tokens) < 2:
+                    return s.error("Usage: SUBSCRIBE channel [channel ...]")
+                await self.pubsub.subscribe(writer, *tokens[1:])
+                for channel in tokens[1:]:
+                    writer.write(s.array(["subscribe", channel, "1"]).encode())
+                    await writer.drain()
+                return None  # We don't return a normal response
 
+            elif cmd == "UNSUBSCRIBE":
+                if not writer:
+                    return s.error("UNSUBSCRIBE requires a client connection.")
+                if len(tokens) < 2:
+                    return s.error("Usage: UNSUBSCRIBE channel [channel ...]")
+                await self.pubsub.unsubscribe(writer, *tokens[1:])
+                for channel in tokens[1:]:
+                    writer.write(s.array(["unsubscribe", channel, "0"]).encode())
+                    await writer.drain()
+                return None
+
+            elif cmd == "PUBLISH":
+                if len(tokens) != 3:
+                    return s.error("Usage: PUBLISH channel message")
+                count = await self.pubsub.publish(tokens[1], tokens[2])
+                return s.integer(count)
             else:
                 return s.error(f"Unknown command '{cmd}'")
 
