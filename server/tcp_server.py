@@ -3,6 +3,7 @@
 import asyncio
 from server.command_router import CommandHandler
 from persistence.aof_replayer import replay_aof
+import os
 
 async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, handler: CommandHandler):
     addr = writer.get_extra_info('peername')
@@ -48,10 +49,11 @@ async def start_server():
     # Start GC task
     asyncio.create_task(handler.expiry.run_gc(handler._delete_key_everywhere, interval=1))
 
+    port = int(os.getenv("PORT", 6379))
     server = await asyncio.start_server(
-        lambda r, w: handle_client(r, w, handler), host="0.0.0.0", port=6379
+        lambda r, w: handle_client(r, w, handler), host="0.0.0.0", port=port
     )
 
-    print("🚀 Redis clone running on port 6379")
+    print(f"🚀 Redis clone running on port {port}")
     async with server:
         await server.serve_forever()

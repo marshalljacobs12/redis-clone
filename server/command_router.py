@@ -4,6 +4,7 @@ from datastore import BaseStore, ListStore, SetStore, HashStore, ZSetStore, Expi
 from protocol import serializer as s
 from persistence.aof_writer import AOFWriter
 from persistence.aof_compactor import rewrite_aof
+from replication.replication_manager import ReplicationManager
 import os
 
 class CommandHandler:
@@ -16,6 +17,7 @@ class CommandHandler:
         self.expiry = ExpiryManager()
         self.pubsub = PubSubManager()
         self.aof = AOFWriter()
+        self.replication = ReplicationManager()
 
     async def handle(self, tokens: list[str], writer=None):
         if not tokens:
@@ -24,6 +26,15 @@ class CommandHandler:
         cmd = tokens[0].upper()
 
         try:
+            # --- Replication Commands ---
+            if cmd == "SLAVEOF":
+                if len(tokens) != 3:
+                    return s.error("Usage: SLAVEOF host port")
+                host = tokens[1]
+                port = int(tokens[2])
+                await self.replication.become_replica(host, port)
+                return s.simple_string(f"Now replicating from {host}:{port}")
+
             # --- Base Commands ---
             if cmd == "PING":
                 return s.simple_string("PONG")
@@ -40,6 +51,7 @@ class CommandHandler:
                 except MemoryError as e:
                     return s.error(str(e))
                 self.aof.append(tokens)
+                await self.replication.forward_to_replicas(*tokens)
                 return s.simple_string("OK")
 
             elif cmd == "GET":
@@ -54,6 +66,7 @@ class CommandHandler:
                     return self._error("Usage: DEL key")
                 success = self.store.delete(tokens[1])
                 self.aof.append(tokens)
+                await self.replication.forward_to_replicas(*tokens)
                 return s.integer(int(success))
 
             elif cmd == "EXISTS":
@@ -68,17 +81,17 @@ class CommandHandler:
                     return s.error("Usage: EXPIRE key seconds")
                 key = tokens[1]
                 ttl = int(tokens[2])
-                # Check if key exists in any store
                 exists = (
                     self.store.exists(key) or
                     key in self.hashes.hashes or
                     key in self.lists.lists or
                     key in self.sets.sets or
-                    key in self.zsets.scores  # or self.zsets.sorted, depending on your implementation
+                    key in self.zsets.scores
                 )
                 if not exists:
                     return s.integer(0)
                 self.expiry.set_expiry(key, ttl)
+                await self.replication.forward_to_replicas(*tokens)
                 return s.integer(1)
 
             elif cmd == "TTL":
@@ -92,6 +105,7 @@ class CommandHandler:
                     return self._error("Usage: LPUSH key value [value ...]")
                 count = self.lists.lpush(tokens[1], *tokens[2:])
                 self.aof.append(tokens)
+                await self.replication.forward_to_replicas(*tokens)
                 return s.integer(count)
 
             elif cmd == "RPUSH":
@@ -99,6 +113,7 @@ class CommandHandler:
                     return self._error("Usage: RPUSH key value [value ...]")
                 count = self.lists.rpush(tokens[1], *tokens[2:])
                 self.aof.append(tokens)
+                await self.replication.forward_to_replicas(*tokens)
                 return s.integer(count)
 
             elif cmd == "LPOP":
@@ -107,6 +122,7 @@ class CommandHandler:
                 self._delete_if_expired(tokens[1])
                 val = self.lists.lpop(tokens[1])
                 self.aof.append(tokens)
+                await self.replication.forward_to_replicas(*tokens)
                 return s.bulk_string(val)
 
             elif cmd == "RPOP":
@@ -115,6 +131,7 @@ class CommandHandler:
                 self._delete_if_expired(tokens[1])
                 val = self.lists.rpop(tokens[1])
                 self.aof.append(tokens)
+                await self.replication.forward_to_replicas(*tokens)
                 return s.bulk_string(val)
 
             elif cmd == "LRANGE":
@@ -136,6 +153,7 @@ class CommandHandler:
                     return self._error("Usage: SADD key member [member ...]")
                 count = self.sets.sadd(tokens[1], *tokens[2:])
                 self.aof.append(tokens)
+                await self.replication.forward_to_replicas(*tokens)
                 return s.integer(count)
 
             elif cmd == "SREM":
@@ -143,6 +161,7 @@ class CommandHandler:
                     return self._error("Usage: SREM key member [member ...]")
                 count = self.sets.srem(tokens[1], *tokens[2:])
                 self.aof.append(tokens)
+                await self.replication.forward_to_replicas(*tokens)
                 return s.integer(count)
 
             elif cmd == "SISMEMBER":
@@ -165,6 +184,7 @@ class CommandHandler:
                     return s.error("Usage: HSET key field value")
                 result = self.hashes.hset(tokens[1], tokens[2], tokens[3])
                 self.aof.append(tokens)
+                await self.replication.forward_to_replicas(*tokens)
                 return s.integer(result)
 
             elif cmd == "HGET":
@@ -185,6 +205,7 @@ class CommandHandler:
                     return s.error("Usage: HDEL key field [field ...]")
                 count = self.hashes.hdel(tokens[1], *tokens[2:])
                 self.aof.append(tokens)
+                await self.replication.forward_to_replicas(*tokens)
                 return s.integer(count)
             
             # --- ZSET Commands ---
@@ -193,6 +214,7 @@ class CommandHandler:
                     return s.error("Usage: ZADD key score member")
                 result = self.zsets.zadd(tokens[1], float(tokens[2]), tokens[3])
                 self.aof.append(tokens)
+                await self.replication.forward_to_replicas(*tokens)
                 return s.integer(result)
 
             elif cmd == "ZSCORE":
@@ -208,6 +230,7 @@ class CommandHandler:
                 self._delete_if_expired(tokens[1])
                 members = self.zsets.zrange(tokens[1], int(tokens[2]), int(tokens[3]))
                 return s.array(members)
+
             # --- Pub/Sub Commands ---
             if cmd == "SUBSCRIBE":
                 if not writer:
@@ -218,7 +241,7 @@ class CommandHandler:
                 for channel in tokens[1:]:
                     writer.write(s.array(["subscribe", channel, "1"]).encode())
                     await writer.drain()
-                return None  # We don't return a normal response
+                return None
 
             elif cmd == "UNSUBSCRIBE":
                 if not writer:
@@ -236,12 +259,13 @@ class CommandHandler:
                     return s.error("Usage: PUBLISH channel message")
                 count = await self.pubsub.publish(tokens[1], tokens[2])
                 return s.integer(count)
+
             else:
                 return s.error(f"Unknown command '{cmd}'")
 
         except Exception as e:
             return s.error(str(e))
-        
+
     def _delete_if_expired(self, key: str):
         if self.expiry.is_expired(key):
             self._delete_key_everywhere(key)
@@ -254,7 +278,7 @@ class CommandHandler:
         self.zsets.scores.pop(key, None)
         self.zsets.sorted.pop(key, None)
         self.expiry.remove(key)
-        
+
     def rewrite_aof_log(self):
         rewrite_aof(self)
         os.replace("aof.log.rewrite", "aof.log")

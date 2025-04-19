@@ -19,3 +19,10 @@ def array(items: list[str]) -> str:
     for item in items:
         out += bulk_string(item)
     return out
+
+def encode_command(*args) -> bytes:
+    cmd = f"*{len(args)}\r\n"
+    for arg in args:
+        encoded = str(arg)
+        cmd += f"${len(encoded)}\r\n{encoded}\r\n"
+    return cmd.encode()
